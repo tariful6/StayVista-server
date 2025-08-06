@@ -55,6 +55,24 @@ async function run() {
     const roomCollection = client.db('stayVista').collection('rooms')
     const userCollection = client.db('stayVista').collection('users')
 
+    // verify admin middleware ------------------------------
+    const verifyAdmin = async (req, res, next) => {
+      const user = req.user;
+      const query = {email : user?.email}
+      const result = await userCollection.findOne(query)
+      if(!result || result?.role !== 'admin') return res.status(401).send({message : 'unauthorized access'})
+      next()
+    }
+    // // verify host middleware ------------------------------
+    const verifyHost = async (req, res, next) => {
+      const user = req.user;
+      const query = {email : user?.email}
+      const result = await userCollection.findOne(query)
+      if(!result || result?.role === 'host') return res.status(401).send({message : 'unauthorized access'})
+      next()
+    }
+
+    // auth related api  --------------
     app.post('/jwt', async (req, res) => {
       const user = req.body
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -90,16 +108,17 @@ async function run() {
 
       // check if user in already in db ---
       const query = {email : user?.email}
+
       const isExits = await userCollection.findOne(query)
       if(isExits){
+
         if(user.status === 'Requested'){
           const result = await userCollection.updateOne(query, {$set : {status : user?.status}}) 
-          res.send(result)
+          return res.send(result)
         }else{
            return res.send(isExits)
         }
       }
-
       const options = { upsert : true }
       const updateDoc = {
         $set : {
@@ -111,12 +130,36 @@ async function run() {
       res.send(result)
     })
 
+
     // get all user from db --------------------------
-    app.get('/users', async(req,res)=>{
+    app.get('/users', verifyToken, verifyAdmin, async(req,res)=>{
       const result = await userCollection.find().toArray()
       res.send(result)
     })
 
+     // get user based on email from db --------------------------
+    app.get('/users/:email', async(req,res)=>{
+      const email = req.params.email;
+      const result = await userCollection.findOne({email})
+      res.send(result)
+    })
+
+    // update user role ------------------------------------------
+
+    app.patch('/user/update/:email', async(req, res)=> {
+       const email = req.params.email;
+       const user = req.body;
+       const query = {email}
+       const updateDoc = {
+        $set : {
+          ...user, timestamp : Date.now()
+        } 
+       }
+      const result = await userCollection.updateOne(query, updateDoc)
+      res.send(result) 
+    })
+
+  
     // rooms api --------------------------
     app.get('/rooms', async(req, res)=> {
       const category = req.query.category;
@@ -135,13 +178,14 @@ async function run() {
       res.send(result)
     })
 
-    app.post('/room', async(req, res)=>{
+    // save a room in db ----------------
+    app.post('/room', verifyToken, verifyHost, async(req, res)=>{
       const roomData = req.body;
       const result = await roomCollection.insertOne(roomData)
       res.send(result)
     })
 
-    app.delete('/room/:id', async(req, res)=> {
+    app.delete('/room/:id', verifyToken, verifyHost,  async(req, res)=> {
       const id = req.params.id;
       const query = {_id : new ObjectId(id)}
       const result = await roomCollection.deleteOne(query);
@@ -150,7 +194,7 @@ async function run() {
 
 
     // get all room for host --------
-    app.get('/my-listings/:email', async(req, res)=> {
+    app.get('/my-listings/:email', verifyToken, verifyHost,  async(req, res)=> {
       const email = req.params.email;
       const query = {'host.email' : email}
       const result = await roomCollection.find(query).toArray();
